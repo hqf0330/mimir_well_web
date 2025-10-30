@@ -1,66 +1,304 @@
 <script lang="ts" setup>
+import { reactive, ref, computed, onMounted } from 'vue';
 import { Page } from '@vben/common-ui';
 
-import { Button, Card, message, notification, Space } from 'ant-design-vue';
+import {
+  Button,
+  Card,
+  Col,
+  Form,
+  Input,
+  Modal,
+  Row,
+  Select,
+  Space,
+  Switch,
+  Tag,
+  message,
+} from 'ant-design-vue';
+import {
+  createConnSourceApi,
+  getConnSourcesApi,
+  updateConnSourceApi,
+  type ConnSourceDTO,
+} from './data';
 
-type NotificationType = 'error' | 'info' | 'success' | 'warning';
+type ConnectorType = 'mysql' | 'postgresql' | 'sqlite' | 'clickhouse' | 'snowflake';
 
-function info() {
-  message.info('How many roads must a man walk down');
+interface ConnectorItem {
+  id: string;
+  name: string;
+  type: ConnectorType;
+  description?: string;
+  enabled: boolean;
 }
 
-function error() {
-  message.error({
-    content: 'Once upon a time you dressed so fine',
-    duration: 2500,
+const connectors = ref<ConnectorItem[]>([]);
+const rawMap = ref<Record<string, ConnSourceDTO>>({});
+
+const typeOptions = [
+  { label: 'MySQL', value: 'mysql' },
+  { label: 'PostgreSQL', value: 'postgresql' },
+  { label: 'SQLite', value: 'sqlite' },
+  { label: 'ClickHouse', value: 'clickhouse' },
+  { label: 'Snowflake', value: 'snowflake' },
+];
+
+const typeColorMap: Record<ConnectorType, string> = {
+  mysql: 'geekblue',
+  postgresql: 'purple',
+  sqlite: 'gold',
+  clickhouse: 'volcano',
+  snowflake: 'cyan',
+};
+
+// search form like dept
+const query = reactive<{ name?: string; type?: ConnectorType | '' }>({
+  name: '',
+  type: '',
+});
+
+function onReset() {
+  query.name = '';
+  query.type = '' as any;
+}
+
+const filteredConnectors = computed(() => {
+  return connectors.value.filter((c) => {
+    const byName = query.name ? c.name.toLowerCase().includes(query.name.toLowerCase()) : true;
+    const byType = query.type ? c.type === query.type : true;
+    return byName && byType;
   });
+});
+
+async function fetchList() {
+  const res = await getConnSourcesApi({ name: query.name, conn_type: query.type || undefined });
+  const items = res.items || [];
+  const next: ConnectorItem[] = items.map((it) => ({
+    id: String(it.id),
+    name: it.name,
+    type: it.conn_type as ConnectorType,
+    description: it.description || '',
+    enabled: it.status === 1,
+  }));
+  connectors.value = next;
+  const map: Record<string, ConnSourceDTO> = {};
+  items.forEach((it) => (map[String(it.id)] = it));
+  rawMap.value = map;
 }
 
-function warning() {
-  message.warning('How many roads must a man walk down');
-}
-function success() {
-  message.success('Cause you walked hand in hand With another man in my place');
-}
+onMounted(fetchList);
 
-function notify(type: NotificationType) {
-  notification[type]({
-    duration: 2500,
-    message: '说点啥呢',
-    type,
+// modal
+const visible = ref(false);
+const editMode = ref(true);
+const isCreate = ref(true);
+
+const formRef = ref();
+// Create/Update payload aligned with backend CreateConnSourceParam
+const formModel = reactive({
+  id: '',
+  name: '',
+  conn_type: 'mysql' as ConnectorType,
+  host: '',
+  port: undefined as unknown as number,
+  username: '',
+  password_encrypted: '',
+  db_name: '',
+  description: '',
+  status: 1 as 0 | 1,
+});
+
+const rules = {
+  name: [{ required: true, message: '请输入名称' }],
+  conn_type: [{ required: true, message: '请选择类型' }],
+  host: [{ required: true, message: '请输入主机地址' }],
+  port: [{ required: true, message: '请输入端口' }],
+  username: [{ required: true, message: '请输入账号' }],
+  db_name: [{ required: true, message: '请输入数据库' }],
+};
+
+function openCreate() {
+  isCreate.value = true;
+  editMode.value = true;
+  Object.assign(formModel, {
+    id: '',
+    name: '',
+    conn_type: 'mysql' as ConnectorType,
+    host: '',
+    port: undefined as unknown as number,
+    username: '',
+    password_encrypted: '',
+    db_name: '',
+    description: '',
+    status: 1,
   });
+  visible.value = true;
 }
+
+function openEdit(item: ConnectorItem) {
+  isCreate.value = false;
+  editMode.value = true;
+  const raw = rawMap.value[item.id];
+  Object.assign(formModel, {
+    id: item.id,
+    name: raw?.name ?? item.name,
+    conn_type: (raw?.conn_type ?? item.type) as ConnectorType,
+    host: raw?.host ?? '',
+    port: (raw?.port as any) ?? (undefined as unknown as number),
+    username: raw?.username ?? '',
+    password_encrypted: '', // 不回显密码
+    db_name: raw?.db_name ?? '',
+    description: raw?.description ?? item.description ?? '',
+    status: (raw?.status ?? (item.enabled ? 1 : 0)) as 0 | 1,
+  });
+  visible.value = true;
+}
+
+function toggleEdit() {
+  editMode.value = !editMode.value;
+}
+
+async function onSave() {
+  // local validate + save
+  await formRef.value?.validate();
+  // build API payload compatible with CreateConnSourceParam
+  const payload = {
+    name: formModel.name,
+    conn_type: formModel.conn_type,
+    host: formModel.host,
+    port: Number(formModel.port),
+    username: formModel.username,
+    password_encrypted: formModel.password_encrypted,
+    db_name: formModel.db_name,
+    status: formModel.status,
+  };
+
+  if (isCreate.value) {
+    await createConnSourceApi(payload as any);
+    message.success('创建成功');
+  } else {
+    const pk = Number(formModel.id);
+    await updateConnSourceApi(pk, payload as any);
+    message.success('保存成功');
+  }
+  visible.value = false;
+  await fetchList();
+}
+
+function onEnableChange(item: ConnectorItem, value: boolean) {
+  item.enabled = value;
+  message.success(value ? '已启用' : '已停用');
+}
+
+function onEnableClick(item: ConnectorItem) {
+  if (item.enabled) {
+    Modal.confirm({
+      title: '确认停用？',
+      content: `停用 “${item.name}” 后将无法使用该数据源。`,
+      okText: '确定',
+      cancelText: '取消',
+      onOk: async () => {
+        const raw = rawMap.value[item.id];
+        if (raw) {
+          await updateConnSourceApi(raw.id, { ...raw, status: 0 });
+          await fetchList();
+        } else {
+          onEnableChange(item, false);
+        }
+      },
+    });
+  } else {
+    const raw = rawMap.value[item.id];
+    if (raw) {
+      updateConnSourceApi(raw.id, { ...raw, status: 1 }).then(fetchList);
+    } else {
+      onEnableChange(item, true);
+    }
+  }
+}
+
+const headerTitle = computed(() =>
+  isCreate.value ? '创建数据源' : editMode.value ? '编辑数据源' : '数据源详情',
+);
 </script>
 
 <template>
-  <Page
-    description="支持多语言，主题功能集成切换等"
-    title="Ant Design Vue组件使用演示"
-  >
-    <Card class="mb-5" title="按钮">
-      <Space>
-        <Button>Default</Button>
-        <Button type="primary"> Primary </Button>
-        <Button> Info </Button>
-        <Button danger> Error </Button>
-      </Space>
-    </Card>
-    <Card class="mb-5" title="Message">
-      <Space>
-        <Button @click="info"> 信息 </Button>
-        <Button danger @click="error"> 错误 </Button>
-        <Button @click="warning"> 警告 </Button>
-        <Button @click="success"> 成功 </Button>
-      </Space>
-    </Card>
+  <Page auto-content-height>
+    <div class="mb-3" style="display:flex; align-items:center; justify-content: space-between; gap:12px;">
+      <div>
+        <Button type="primary" @click="openCreate">新增数据源</Button>
+      </div>
+      <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+        <Input v-model:value="query.name" placeholder="名称" style="width: 220px;" />
+        <Select v-model:value="query.type" :options="typeOptions" allowClear placeholder="类型" style="width: 180px;" />
+        <Button type="primary">查询</Button>
+        <Button @click="onReset">重置</Button>
+      </div>
+    </div>
 
-    <Card class="mb-5" title="Notification">
-      <Space>
-        <Button @click="notify('info')"> 信息 </Button>
-        <Button danger @click="notify('error')"> 错误 </Button>
-        <Button @click="notify('warning')"> 警告 </Button>
-        <Button @click="notify('success')"> 成功 </Button>
-      </Space>
-    </Card>
+    <Row :gutter="16">
+      <Col v-for="item in filteredConnectors" :key="item.id" :xs="24" :sm="12" :md="8" :lg="6">
+        <Card :title="item.name" class="mb-4">
+
+          <div style="min-height: 44px; color: rgba(0,0,0,0.75);">{{ item.description }}</div>
+
+          <div class="mb-3">
+            <Tag :color="typeColorMap[item.type]" bordered>{{ item.type }}</Tag>
+          </div>
+          <div style="display:flex; justify-content: space-between; align-items:center;">
+            <Button size="small" type="default" @click="openEdit(item)">编辑</Button>
+            <Button
+              size="small"
+              :danger="item.enabled"
+              :type="item.enabled ? 'default' : 'primary'"
+              @click="onEnableClick(item)"
+            >
+              {{ item.enabled ? '停用' : '启用' }}
+            </Button>
+          </div>
+        </Card>
+      </Col>
+    </Row>
+
+    <Modal v-model:open="visible" :title="headerTitle" :maskClosable="false" width="560px">
+      <Form ref="formRef" :model="formModel" :rules="rules" :disabled="!editMode" :label-col="{ span: 5 }"
+            :wrapper-col="{ span: 18 }">
+        <Form.Item label="名称" name="name">
+          <Input v-model:value="formModel.name" placeholder="请输入数据源名称" />
+        </Form.Item>
+        <Form.Item label="类型" name="conn_type">
+          <Select v-model:value="formModel.conn_type" :options="typeOptions" />
+        </Form.Item>
+        <Form.Item label="主机" name="host">
+          <Input v-model:value="formModel.host" placeholder="请输入主机地址" />
+        </Form.Item>
+        <Form.Item label="端口" name="port">
+          <Input v-model:value="(formModel.port as any)" type="number" placeholder="请输入端口" />
+        </Form.Item>
+        <Form.Item label="账号" name="username">
+          <Input v-model:value="formModel.username" placeholder="请输入账号" />
+        </Form.Item>
+        <Form.Item label="密码">
+          <Input.Password v-model:value="formModel.password_encrypted" placeholder="请输入密码" />
+        </Form.Item>
+        <Form.Item label="数据库" name="db_name">
+          <Input v-model:value="formModel.db_name" placeholder="请输入数据库名称" />
+        </Form.Item>
+        <Form.Item label="描述">
+          <Input.TextArea v-model:value="formModel.description" :rows="3" />
+        </Form.Item>
+        <Form.Item label="启用">
+          <Switch v-model:checked="(formModel.status as any)" :checkedValue="1" :unCheckedValue="0" />
+        </Form.Item>
+      </Form>
+      <template #footer>
+        <Space>
+          <Button v-if="!isCreate" @click="toggleEdit">{{ editMode ? '只读' : '编辑' }}</Button>
+          <Button @click="visible=false">取消</Button>
+          <Button type="primary" v-if="editMode" @click="onSave">保存</Button>
+        </Space>
+      </template>
+    </Modal>
   </Page>
 </template>
