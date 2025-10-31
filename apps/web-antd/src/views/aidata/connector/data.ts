@@ -55,4 +55,13 @@ export async function deleteConnSourcesApi(pks: number[]) {
   return requestClient.delete(`${BASE}`, { data: { pks } });
 }
 
+export interface TestConnectionResult {
+  status: 'success' | 'error';
+  message: string;
+}
+
+export async function testConnSourceApi(pk: number) {
+  return requestClient.post<TestConnectionResult>(`${BASE}/${pk}/test`);
+}
+
 

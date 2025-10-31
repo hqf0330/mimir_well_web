@@ -19,6 +19,7 @@ import {
 import {
   createConnSourceApi,
   getConnSourcesApi,
+  testConnSourceApi,
   updateConnSourceApi,
   type ConnSourceDTO,
 } from './data';
@@ -221,6 +222,36 @@ function onEnableClick(item: ConnectorItem) {
 const headerTitle = computed(() =>
   isCreate.value ? '创建数据源' : editMode.value ? '编辑数据源' : '数据源详情',
 );
+
+async function onTestConnection(item: ConnectorItem) {
+  const raw = rawMap.value[item.id];
+  if (!raw) {
+    message.error('数据源信息不存在');
+    return;
+  }
+
+  try {
+    message.loading({ content: '正在测试连接...', key: 'test_conn', duration: 0 });
+    const res = await testConnSourceApi(raw.id);
+    message.destroy('test_conn');
+    // res.data 是实际返回的测试结果
+    const result = (res as any).data || res;
+    if (result.status === 'success') {
+      message.success(result.message || '连接成功');
+    } else {
+      message.error(result.message || '连接失败');
+    }
+  } catch (error: any) {
+    message.destroy('test_conn');
+    const errorMsg = error?.response?.data?.message || error?.message || '测试连接失败';
+    message.error(errorMsg);
+  }
+}
+
+function onAnalyzeStructure(item: ConnectorItem) {
+  // TODO: 分析结构功能待实现
+  message.info('分析结构功能待实现');
+}
 </script>
 
 <template>
@@ -246,16 +277,23 @@ const headerTitle = computed(() =>
           <div class="mb-3">
             <Tag :color="typeColorMap[item.type]" bordered>{{ item.type }}</Tag>
           </div>
-          <div style="display:flex; justify-content: space-between; align-items:center;">
-            <Button size="small" type="default" @click="openEdit(item)">编辑</Button>
-            <Button
-              size="small"
-              :danger="item.enabled"
-              :type="item.enabled ? 'default' : 'primary'"
-              @click="onEnableClick(item)"
-            >
-              {{ item.enabled ? '停用' : '启用' }}
-            </Button>
+          <div style="display:flex; flex-direction: column; gap: 8px;">
+            <div style="display:flex; gap: 8px;">
+              <Button size="small" type="default" @click="openEdit(item)" style="flex: 1;">编辑</Button>
+              <Button
+                size="small"
+                :danger="item.enabled"
+                :type="item.enabled ? 'default' : 'primary'"
+                @click="onEnableClick(item)"
+                style="flex: 1;"
+              >
+                {{ item.enabled ? '停用' : '启用' }}
+              </Button>
+            </div>
+            <div style="display:flex; gap: 8px;">
+              <Button size="small" type="default" @click="onTestConnection(item)" style="flex: 1;">测试</Button>
+              <Button size="small" type="default" @click="onAnalyzeStructure(item)" style="flex: 1;" disabled>分析结构</Button>
+            </div>
           </div>
         </Card>
       </Col>
